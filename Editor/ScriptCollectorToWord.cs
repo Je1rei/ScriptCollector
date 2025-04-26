@@ -9,32 +9,28 @@ using System.Collections.Generic;
 
 public class ScriptCollectorToWord : EditorWindow
 {
-    private const string NUGET_GIT_URL = "https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity";
-    private const string OPEN_XML_PACKAGE_ID = "DocumentFormat.OpenXml";
-
-    private const string OPEN_XML_TYPE_NAME =
+    private const string NUGET_GIT_URL        = "https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity";
+    private const string OPEN_XML_PACKAGE_ID  = "DocumentFormat.OpenXml";
+    private const string OPEN_XML_TYPE_NAME   =
         "DocumentFormat.OpenXml.Packaging.WordprocessingDocument, DocumentFormat.OpenXml";
+    private const float  LERP_SPEED           = 10f;
 
-    private const float LERP_SPEED = 10f;
+    private string _rootFolder      = Application.dataPath;
+    private string _outputFolder    = Application.dataPath;
+    private string _outputFileName  = "ScriptsBundle.docx";
 
-    private string _rootFolder = Application.dataPath;
-    private string _outputFolder = Application.dataPath;
-    private string _outputFileName = "ScriptsBundle.docx";
+    private bool    _showAdvanced         = false;
+    private bool    _includeAllSubfolders = true;
+    private bool    _excludeEditorFolders = false;
+    private string[] _subfolders          = Array.Empty<string>();
+    private bool[]  _subfolderSelected    = Array.Empty<bool>();
+    private Vector2 _subfoldersScroll     = Vector2.zero;
 
-    private bool _showAdvanced = false;
-    private bool _includeAllSubfolders = true;
-    private bool _excludeEditorFolders = false;
-    private string[] _subfolders = Array.Empty<string>();
-    private bool[] _subfolderSelected = Array.Empty<bool>();
-    private Vector2 _subfoldersScroll = Vector2.zero;
+    private bool   _generationSucceeded = false;
+    private string _generatedPath       = string.Empty;
 
-    private bool _generationSucceeded = false;
-    private string _generatedPath = string.Empty;
-
-    private bool _openXmlLoaded = false;
-
-    private float _pendingHeight = -1f;
-
+    private bool  _openXmlLoaded  = false;
+    private float _pendingHeight  = -1f;
     private static bool s_windowCentered = false;
 
     [MenuItem("Tools/Generate Word from Scripts", priority = 250)]
@@ -46,15 +42,15 @@ public class ScriptCollectorToWord : EditorWindow
         if (!s_windowCentered)
         {
             var resolution = UnityStats.screenRes.Split('x');
-            if (resolution.Length == 2 && int.TryParse(resolution[0], out int sw) &&
+            if (resolution.Length == 2 &&
+                int.TryParse(resolution[0], out int sw) &&
                 int.TryParse(resolution[1], out int sh))
             {
-                var rect = window.position;
-                rect.x = (sw - rect.width) * 0.5f;
-                rect.y = (sh - rect.height) * 0.5f;
+                var rect   = window.position;
+                rect.x     = (sw - rect.width)  * 0.5f;
+                rect.y     = (sh - rect.height) * 0.5f;
                 window.position = rect;
             }
-
             s_windowCentered = true;
         }
 
@@ -71,17 +67,14 @@ public class ScriptCollectorToWord : EditorWindow
 
     private void Update()
     {
-        if (_pendingHeight < 0f)
-        {
-            return;
-        }
+        if (_pendingHeight < 0f) { return; }
 
         var rect = position;
         rect.height = Mathf.Lerp(rect.height, _pendingHeight, Time.deltaTime * LERP_SPEED);
 
         if (Mathf.Abs(rect.height - _pendingHeight) < 0.5f)
         {
-            rect.height = _pendingHeight;
+            rect.height    = _pendingHeight;
             _pendingHeight = -1f;
         }
 
@@ -93,7 +86,7 @@ public class ScriptCollectorToWord : EditorWindow
         void Touch() => _generationSucceeded = false;
 
         bool nugetInstalled = IsNugetInstalled();
-        bool openXmlReady = _openXmlLoaded;
+        bool openXmlReady   = _openXmlLoaded;
 
         if (!nugetInstalled || !openXmlReady)
         {
@@ -104,7 +97,7 @@ public class ScriptCollectorToWord : EditorWindow
         if (!nugetInstalled)
         {
             EditorGUILayout.HelpBox(
-                "NuGetForUnity is required. Install it via Package Manager → Add package from Git URL.",
+                "NuGetForUnity is required. Install via Package Manager → Add package from Git URL.",
                 MessageType.Warning);
 
             DrawReadOnlyField("Git URL:", NUGET_GIT_URL);
@@ -132,7 +125,6 @@ public class ScriptCollectorToWord : EditorWindow
             {
                 EditorApplication.ExecuteMenuItem("NuGet/Manage NuGet Packages");
             }
-
             EditorGUI.EndDisabledGroup();
 
             if (GUILayout.Button("Refresh", GUILayout.Width(80)))
@@ -143,24 +135,17 @@ public class ScriptCollectorToWord : EditorWindow
             }
 
             EditorGUILayout.EndHorizontal();
-
             EditorGUILayout.Space(6);
         }
 
-        if (!nugetInstalled || !openXmlReady)
-        {
-            return;
-        }
+        if (!nugetInstalled || !openXmlReady) { return; }
 
         EditorGUILayout.Space(6);
         DrawRootFolderSelector(Touch);
 
         bool previousAdvanced = _showAdvanced;
         _showAdvanced = EditorGUILayout.ToggleLeft("Advanced options", _showAdvanced, EditorStyles.boldLabel);
-        if (_showAdvanced != previousAdvanced)
-        {
-            Touch();
-        }
+        if (_showAdvanced != previousAdvanced) { Touch(); }
 
         if (_showAdvanced)
         {
@@ -175,17 +160,15 @@ public class ScriptCollectorToWord : EditorWindow
         if (_generationSucceeded)
         {
             var style = new GUIStyle(EditorStyles.label)
-                { normal = { textColor = Color.green }, fontStyle = FontStyle.Bold };
+            { normal = { textColor = Color.green }, fontStyle = FontStyle.Bold };
 
             EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
             GUILayout.Label("✔ Word document saved", style);
             GUILayout.FlexibleSpace();
-            
             if (GUILayout.Button("Open Folder", GUILayout.Width(100)))
             {
                 EditorUtility.RevealInFinder(_generatedPath);
             }
-
             EditorGUILayout.EndHorizontal();
         }
 
@@ -194,7 +177,6 @@ public class ScriptCollectorToWord : EditorWindow
         {
             GenerateDocx();
         }
-
         GUI.enabled = true;
 
         if (Event.current.type == EventType.Repaint)
@@ -219,14 +201,15 @@ public class ScriptCollectorToWord : EditorWindow
         {
             EditorGUIUtility.systemCopyBuffer = value;
         }
-
         EditorGUILayout.EndHorizontal();
     }
 
-    private void CheckDependencies() => _openXmlLoaded = Type.GetType(OPEN_XML_TYPE_NAME) != null;
+    private void CheckDependencies() =>
+        _openXmlLoaded = Type.GetType(OPEN_XML_TYPE_NAME) != null;
 
-    private static bool IsNugetInstalled() => AppDomain.CurrentDomain.GetAssemblies().Any(a =>
-        a.GetName().Name.IndexOf("NuGetForUnity", StringComparison.OrdinalIgnoreCase) >= 0);
+    private static bool IsNugetInstalled() =>
+        AppDomain.CurrentDomain.GetAssemblies().Any(a =>
+            a.GetName().Name.IndexOf("NuGetForUnity", StringComparison.OrdinalIgnoreCase) >= 0);
 
     private void DrawRootFolderSelector(Action touch)
     {
@@ -239,7 +222,6 @@ public class ScriptCollectorToWord : EditorWindow
             RefreshSubfolders();
             touch();
         }
-
         if (GUILayout.Button("…", GUILayout.Width(28)))
         {
             string selected = EditorUtility.OpenFolderPanel("Select root folder", _rootFolder, "");
@@ -250,7 +232,6 @@ public class ScriptCollectorToWord : EditorWindow
                 touch();
             }
         }
-
         EditorGUILayout.EndHorizontal();
     }
 
@@ -263,10 +244,8 @@ public class ScriptCollectorToWord : EditorWindow
         {
             EditorGUILayout.LabelField("Select sub-folders to scan", EditorStyles.boldLabel);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
             _subfoldersScroll = EditorGUILayout.BeginScrollView(_subfoldersScroll, GUILayout.Height(120));
-
-            foreach (int i in Enumerable.Range(0, _subfolders.Length))
+            for (int i = 0; i < _subfolders.Length; i++)
             {
                 bool selected = EditorGUILayout.ToggleLeft(_subfolders[i], _subfolderSelected[i]);
                 if (selected != _subfolderSelected[i])
@@ -275,7 +254,6 @@ public class ScriptCollectorToWord : EditorWindow
                     touch();
                 }
             }
-
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
         }
@@ -291,7 +269,6 @@ public class ScriptCollectorToWord : EditorWindow
             _outputFolder = newOutput;
             touch();
         }
-
         if (GUILayout.Button("…", GUILayout.Width(28)))
         {
             string selected = EditorUtility.OpenFolderPanel("Select output folder", _outputFolder, "");
@@ -301,7 +278,6 @@ public class ScriptCollectorToWord : EditorWindow
                 touch();
             }
         }
-
         EditorGUILayout.EndHorizontal();
 
         EditorGUILayout.BeginHorizontal();
@@ -312,7 +288,6 @@ public class ScriptCollectorToWord : EditorWindow
             _outputFileName = newFile;
             touch();
         }
-
         EditorGUILayout.EndHorizontal();
     }
 
@@ -320,13 +295,14 @@ public class ScriptCollectorToWord : EditorWindow
     {
         if (!Directory.Exists(_rootFolder))
         {
-            _subfolders = Array.Empty<string>();
+            _subfolders        = Array.Empty<string>();
             _subfolderSelected = Array.Empty<bool>();
             return;
         }
 
-        _subfolders = Directory.GetDirectories(_rootFolder, "*", SearchOption.TopDirectoryOnly).Select(Path.GetFileName)
-            .ToArray();
+        _subfolders = Directory.GetDirectories(_rootFolder, "*", SearchOption.TopDirectoryOnly)
+                               .Select(Path.GetFileName)
+                               .ToArray();
         _subfolderSelected = _subfolders.Select(_ => true).ToArray();
     }
 
@@ -336,11 +312,32 @@ public class ScriptCollectorToWord : EditorWindow
 
         var allFiles = Directory.GetFiles(_rootFolder, "*.cs", SearchOption.AllDirectories);
 
-        var filteredFiles = _includeAllSubfolders ? allFiles : allFiles.Where(IsAllowed).ToArray();
+        string[] filteredFiles;
+        if (_includeAllSubfolders)
+        {
+            filteredFiles = allFiles;
+        }
+        else
+        {
+            var allowed = new HashSet<string>(
+                _subfolders.Where((s, i) => _subfolderSelected[i])
+            );
+
+            filteredFiles = allFiles.Where(path =>
+            {
+                var rel = path.Substring(_rootFolder.Length)
+                              .TrimStart(Path.DirectorySeparatorChar, '/')
+                              .Replace("\\", "/");
+                var first = rel.Split('/')[0];
+                return allowed.Contains(first);
+            }).ToArray();
+        }
 
         if (_excludeEditorFolders)
         {
-            filteredFiles = filteredFiles.Where(f => !f.Replace("\\", "/").Contains("/Editor/")).ToArray();
+            filteredFiles = filteredFiles
+                .Where(f => !f.Replace("\\", "/").Contains("/Editor/"))
+                .ToArray();
         }
 
         if (filteredFiles.Length == 0)
@@ -349,54 +346,43 @@ public class ScriptCollectorToWord : EditorWindow
             return;
         }
 
-        var wordprocessingType = Type.GetType(OPEN_XML_TYPE_NAME);
-        if (wordprocessingType == null)
-        {
-            Debug.LogError("OpenXML SDK not available");
-            return;
-        }
+        var wordType = Type.GetType(OPEN_XML_TYPE_NAME);
+        if (wordType == null) { Debug.LogError("OpenXML SDK not available"); return; }
 
-        var assembly = wordprocessingType.Assembly;
-        var bodyType = assembly.GetType("DocumentFormat.OpenXml.Wordprocessing.Body");
-        var paragraphType = assembly.GetType("DocumentFormat.OpenXml.Wordprocessing.Paragraph");
-        var runType = assembly.GetType("DocumentFormat.OpenXml.Wordprocessing.Run");
-        var textType = assembly.GetType("DocumentFormat.OpenXml.Wordprocessing.Text");
-        var documentType = assembly.GetType("DocumentFormat.OpenXml.Wordprocessing.Document");
-        var mainPartType = assembly.GetType("DocumentFormat.OpenXml.Packaging.MainDocumentPart");
-        var enumType = assembly.GetType("DocumentFormat.OpenXml.WordprocessingDocumentType");
-        var openXmlElementType = assembly.GetType("DocumentFormat.OpenXml.OpenXmlElement");
-        var compositeType = assembly.GetType("DocumentFormat.OpenXml.OpenXmlCompositeElement");
+        var asm             = wordType.Assembly;
+        var bodyType        = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Body");
+        var paragraphType   = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Paragraph");
+        var runType         = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Run");
+        var textType        = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Text");
+        var documentType    = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Document");
+        var mainPartType    = asm.GetType("DocumentFormat.OpenXml.Packaging.MainDocumentPart");
+        var enumType        = asm.GetType("DocumentFormat.OpenXml.WordprocessingDocumentType");
+        var openXmlElemType = asm.GetType("DocumentFormat.OpenXml.OpenXmlElement");
+        var compositeType   = asm.GetType("DocumentFormat.OpenXml.OpenXmlCompositeElement");
 
         var appendChildMethod = compositeType.GetMethods()
             .First(m => m.Name == "AppendChild" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
-            .MakeGenericMethod(openXmlElementType);
+            .MakeGenericMethod(openXmlElemType);
 
         string docxPath = Path.Combine(_outputFolder, _outputFileName);
 
         if (File.Exists(docxPath))
         {
-            try
-            {
-                File.Delete(docxPath);
-            }
+            try { File.Delete(docxPath); }
             catch (IOException)
             {
-                if (!EditorUtility.DisplayDialog("File in use", "Close it and retry.", "Retry", "Cancel"))
-                {
-                    return;
-                }
-
+                if (!EditorUtility.DisplayDialog("File in use", "Close it and retry.", "Retry", "Cancel")) { return; }
                 File.Delete(docxPath);
             }
         }
 
-        object docx = wordprocessingType.GetMethod("Create", new[] { typeof(string), enumType, typeof(bool) })
-            .Invoke(null, new object[] { docxPath, Enum.Parse(enumType, "Document"), false });
-        object mainPart = wordprocessingType.GetMethod("AddMainDocumentPart").Invoke(docx, null);
+        object docx     = wordType.GetMethod("Create", new[] { typeof(string), enumType, typeof(bool) })
+                                  .Invoke(null, new object[] { docxPath, Enum.Parse(enumType, "Document"), false });
+        object mainPart = wordType.GetMethod("AddMainDocumentPart").Invoke(docx, null);
 
-        var docProperty = mainPartType.GetProperty("Document");
+        var docProp = mainPartType.GetProperty("Document");
         object document = Activator.CreateInstance(documentType);
-        docProperty.SetValue(mainPart, document);
+        docProp.SetValue(mainPart, document);
 
         object body = Activator.CreateInstance(bodyType);
         appendChildMethod.Invoke(document, new[] { body });
@@ -407,37 +393,25 @@ public class ScriptCollectorToWord : EditorWindow
             AddParagraph(body, paragraphType, runType, textType, appendChildMethod, File.ReadAllText(file));
         }
 
-        wordprocessingType.GetMethod("Save").Invoke(docx, null);
-        wordprocessingType.GetMethod("Dispose").Invoke(docx, null);
+        wordType.GetMethod("Save").Invoke(docx, null);
+        wordType.GetMethod("Dispose").Invoke(docx, null);
         AssetDatabase.Refresh();
 
         _generationSucceeded = true;
-        _generatedPath = docxPath;
+        _generatedPath       = docxPath;
         Debug.Log($"Collected {filteredFiles.Length} scripts → '{docxPath}'");
     }
 
-    private bool IsAllowed(string path)
-    {
-        if (_includeAllSubfolders)
-        {
-            return true;
-        }
-
-        var allowed = new HashSet<string>(_subfolders.Where((s, i) => _subfolderSelected[i]));
-        return allowed.Contains(Path.GetFileName(Path.GetDirectoryName(path)));
-    }
-
-    private static void AddParagraph(object body, Type paragraphType, Type runType, Type textType,
-        MethodInfo appendChildMethod, string content)
+    private static void AddParagraph(object body, Type paragraphType, Type runType, Type textType, MethodInfo appendChildMethod, string content)
     {
         var paragraph = Activator.CreateInstance(paragraphType);
-        var run = Activator.CreateInstance(runType);
-        var text = Activator.CreateInstance(textType);
+        var run       = Activator.CreateInstance(runType);
+        var text      = Activator.CreateInstance(textType);
         textType.GetProperty("Text")?.SetValue(text, content);
 
-        appendChildMethod.Invoke(run, new[] { text });
-        appendChildMethod.Invoke(paragraph, new[] { run });
-        appendChildMethod.Invoke(body, new[] { paragraph });
+        appendChildMethod.Invoke(run,       new[] { text      });
+        appendChildMethod.Invoke(paragraph, new[] { run       });
+        appendChildMethod.Invoke(body,      new[] { paragraph });
     }
 }
 #endif
