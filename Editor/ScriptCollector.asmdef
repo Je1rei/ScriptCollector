@@ -1,5 +1,5 @@
 {
-    "name": "ConverterScriptToDOC",
+    "name": "ScriptCollector",
     "rootNamespace": "",
     "references": [],
     "includePlatforms": [
