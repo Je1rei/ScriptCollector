@@ -1,0 +1,13 @@
+{
+  "name": "com.je1rei.ScriptCollector",
+  "displayName": "Script Collector → Word",
+  "version": "0.1.0",
+  "unity": "2020.3",
+  "description": "Collect all C# scripts into a single .docx from the Unity Editor.",
+  "keywords": [ "scripts", "export", "word", "openxml" ],
+  "license": "MIT",
+  "author": {
+    "name": "Je1rei",
+    "url": "https://github.com/Je1rei/ScriptCollector"
+  }
+}
