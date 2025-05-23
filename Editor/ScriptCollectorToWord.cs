@@ -3,242 +3,159 @@ using UnityEditor;
 using UnityEngine;
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
-using System.Reflection;
 using System.Collections.Generic;
+using System.Security;
+using System.Text;
+using CompressionLevel = System.IO.Compression.CompressionLevel;
 
 public class ScriptCollectorToWord : EditorWindow
 {
-    private const string NUGET_GIT_URL        = "https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity";
-    private const string OPEN_XML_PACKAGE_ID  = "DocumentFormat.OpenXml";
-    private const string OPEN_XML_TYPE_NAME   =
-        "DocumentFormat.OpenXml.Packaging.WordprocessingDocument, DocumentFormat.OpenXml";
-    private const float  LERP_SPEED           = 10f;
+    private const float LERP_SPEED = 10f;
+    
+    private string _rootFolder     = NormalizePath(Application.dataPath);
+    private string _outputFolder   = NormalizePath(Application.dataPath);
+    private string _outputFileName = "ScriptsBundle.docx";
 
-    private string _rootFolder      = Application.dataPath;
-    private string _outputFolder    = Application.dataPath;
-    private string _outputFileName  = "ScriptsBundle.docx";
+    private bool   _showAdvanced         = false;
+    private bool   _includeAllSubfolders = true;
+    private bool   _excludeEditorFolders = false;
 
-    private bool    _showAdvanced         = false;
-    private bool    _includeAllSubfolders = true;
-    private bool    _excludeEditorFolders = false;
-    private string[] _subfolders          = Array.Empty<string>();
-    private bool[]  _subfolderSelected    = Array.Empty<bool>();
-    private Vector2 _subfoldersScroll     = Vector2.zero;
+    private string[] _subfolders        = Array.Empty<string>();
+    private bool[]   _subfolderSelected = Array.Empty<bool>();
+    private Vector2  _subfoldersScroll  = Vector2.zero;
+
+    private bool     _chooseConcreteScripts = false;
+    private string[] _scriptFiles    = Array.Empty<string>(); 
+    private bool[]   _scriptSelected = Array.Empty<bool>();
+    private Vector2  _scriptsScroll  = Vector2.zero;
 
     private bool   _generationSucceeded = false;
     private string _generatedPath       = string.Empty;
 
-    private bool  _openXmlLoaded  = false;
-    private float _pendingHeight  = -1f;
-    private static bool s_windowCentered = false;
+    private float       _pendingHeight  = -1f;
+    private static bool _windowCentered = false;
 
     [MenuItem("Tools/Generate Word from Scripts", priority = 250)]
     private static void OpenWindow()
     {
-        var window = GetWindow<ScriptCollectorToWord>("Scripts → Word");
-        window.minSize = new Vector2(580, 300);
+        var w = GetWindow<ScriptCollectorToWord>("Scripts → Word");
+        w.minSize = new Vector2(580, 300);
 
-        if (!s_windowCentered)
+        if (!_windowCentered)
         {
-            var resolution = UnityStats.screenRes.Split('x');
-            if (resolution.Length == 2 &&
-                int.TryParse(resolution[0], out int sw) &&
-                int.TryParse(resolution[1], out int sh))
+            var res = UnityStats.screenRes.Split('x');
+            if (res.Length == 2 &&
+                int.TryParse(res[0], out int sw) &&
+                int.TryParse(res[1], out int sh))
             {
-                var rect   = window.position;
-                rect.x     = (sw - rect.width)  * 0.5f;
-                rect.y     = (sh - rect.height) * 0.5f;
-                window.position = rect;
+                var r = w.position;
+                r.x = (sw - r.width)  * 0.5f;
+                r.y = (sh - r.height) * 0.5f;
+                w.position = r;
             }
-            s_windowCentered = true;
+            _windowCentered = true;
         }
 
-        window.CheckDependencies();
-        window.RefreshSubfolders();
-        window.Repaint();
+        w.RefreshSubfolders();
+        w.RefreshScripts();
+        w.Repaint();
     }
 
     private void OnEnable()
     {
-        CheckDependencies();
         RefreshSubfolders();
+        RefreshScripts();
     }
 
     private void Update()
     {
-        if (_pendingHeight < 0f) { return; }
+        if (_pendingHeight < 0f) return;
 
-        var rect = position;
-        rect.height = Mathf.Lerp(rect.height, _pendingHeight, Time.deltaTime * LERP_SPEED);
+        var r = position;
+        r.height = Mathf.Lerp(r.height, _pendingHeight, Time.deltaTime * LERP_SPEED);
 
-        if (Mathf.Abs(rect.height - _pendingHeight) < 0.5f)
+        if (Mathf.Abs(r.height - _pendingHeight) < 0.5f)
         {
-            rect.height    = _pendingHeight;
+            r.height      = _pendingHeight;
             _pendingHeight = -1f;
         }
-
-        position = rect;
+        position = r;
     }
 
     private void OnGUI()
     {
-        void Touch() => _generationSucceeded = false;
-
-        bool nugetInstalled = IsNugetInstalled();
-        bool openXmlReady   = _openXmlLoaded;
-
-        if (!nugetInstalled || !openXmlReady)
-        {
-            EditorGUILayout.LabelField("Dependencies", EditorStyles.boldLabel);
-            EditorGUILayout.Space(2);
-        }
-
-        if (!nugetInstalled)
-        {
-            EditorGUILayout.HelpBox(
-                "NuGetForUnity is required. Install via Package Manager → Add package from Git URL.",
-                MessageType.Warning);
-
-            DrawReadOnlyField("Git URL:", NUGET_GIT_URL);
-
-            if (GUILayout.Button("Open Package Manager", GUILayout.Height(22)))
-            {
-                EditorApplication.ExecuteMenuItem("Window/Package Manager");
-            }
-
-            EditorGUILayout.Space(4);
-        }
-
-        if (!openXmlReady)
-        {
-            EditorGUILayout.HelpBox(
-                $"Package \"{OPEN_XML_PACKAGE_ID}\" not found. Install it via NuGetForUnity and press Refresh.",
-                MessageType.Info);
-
-            DrawReadOnlyField("Package:", OPEN_XML_PACKAGE_ID);
-
-            EditorGUILayout.BeginHorizontal();
-
-            EditorGUI.BeginDisabledGroup(!nugetInstalled);
-            if (GUILayout.Button("Open NuGetForUnity", GUILayout.Width(160)))
-            {
-                EditorApplication.ExecuteMenuItem("NuGet/Manage NuGet Packages");
-            }
-            EditorGUI.EndDisabledGroup();
-
-            if (GUILayout.Button("Refresh", GUILayout.Width(80)))
-            {
-                AssetDatabase.Refresh();
-                CheckDependencies();
-                Touch();
-            }
-
-            EditorGUILayout.EndHorizontal();
-            EditorGUILayout.Space(6);
-        }
-
-        if (!nugetInstalled || !openXmlReady) { return; }
+        void Invalidate()          => _generationSucceeded = false;
+        void FiltersChanged()      { RefreshScripts(); Invalidate(); }
 
         EditorGUILayout.Space(6);
-        DrawRootFolderSelector(Touch);
+        DrawRootFolderSelector(FiltersChanged);
 
-        bool previousAdvanced = _showAdvanced;
+        bool prevAdv = _showAdvanced;
         _showAdvanced = EditorGUILayout.ToggleLeft("Advanced options", _showAdvanced, EditorStyles.boldLabel);
-        if (_showAdvanced != previousAdvanced) { Touch(); }
+        if (_showAdvanced != prevAdv) Invalidate();
 
         if (_showAdvanced)
         {
             EditorGUILayout.Space(4);
-            DrawAdvancedPanel(Touch);
+            DrawAdvancedPanel(FiltersChanged, Invalidate);
         }
 
         EditorGUILayout.Space(6);
-        DrawOutputSelector(Touch);
+        DrawOutputSelector(Invalidate);
 
         EditorGUILayout.Space(10);
-        if (_generationSucceeded)
-        {
-            var style = new GUIStyle(EditorStyles.label)
-            { normal = { textColor = Color.green }, fontStyle = FontStyle.Bold };
+        DrawSuccessBox();
 
-            EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-            GUILayout.Label("✔ Word document saved", style);
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Open Folder", GUILayout.Width(100)))
-            {
-                EditorUtility.RevealInFinder(_generatedPath);
-            }
-            EditorGUILayout.EndHorizontal();
-        }
+        GUI.enabled = !string.IsNullOrWhiteSpace(_rootFolder) &&
+                      !string.IsNullOrWhiteSpace(_outputFolder);
 
-        GUI.enabled = !string.IsNullOrWhiteSpace(_rootFolder) && !string.IsNullOrWhiteSpace(_outputFolder);
         if (GUILayout.Button("Generate Word file", GUILayout.Height(32)))
-        {
             GenerateDocx();
-        }
+
         GUI.enabled = true;
 
         if (Event.current.type == EventType.Repaint)
         {
-            float required = GUILayoutUtility.GetLastRect().yMax + 10f;
-            required = Mathf.Max(required, minSize.y);
-
-            if (Mathf.Abs(position.height - required) > 0.5f)
-            {
-                _pendingHeight = required;
-            }
+            float need = GUILayoutUtility.GetLastRect().yMax + 10f;
+            need = Mathf.Max(need, minSize.y);
+            if (Mathf.Abs(position.height - need) > 0.5f)
+                _pendingHeight = need;
         }
     }
 
-    private static void DrawReadOnlyField(string label, string value)
-    {
-        EditorGUILayout.BeginHorizontal();
-        EditorGUILayout.LabelField(label, GUILayout.Width(60));
-        EditorGUILayout.SelectableLabel(value, EditorStyles.textField,
-            GUILayout.Height(EditorGUIUtility.singleLineHeight));
-        if (GUILayout.Button("Copy", GUILayout.Width(50)))
-        {
-            EditorGUIUtility.systemCopyBuffer = value;
-        }
-        EditorGUILayout.EndHorizontal();
-    }
-
-    private void CheckDependencies() =>
-        _openXmlLoaded = Type.GetType(OPEN_XML_TYPE_NAME) != null;
-
-    private static bool IsNugetInstalled() =>
-        AppDomain.CurrentDomain.GetAssemblies().Any(a =>
-            a.GetName().Name.IndexOf("NuGetForUnity", StringComparison.OrdinalIgnoreCase) >= 0);
-
-    private void DrawRootFolderSelector(Action touch)
+    private void DrawRootFolderSelector(Action filtersChanged)
     {
         EditorGUILayout.LabelField("Root folder with scripts", EditorStyles.boldLabel);
         EditorGUILayout.BeginHorizontal();
         string newPath = EditorGUILayout.TextField(_rootFolder);
         if (newPath != _rootFolder)
         {
-            _rootFolder = newPath;
+            _rootFolder = NormalizePath(newPath);
             RefreshSubfolders();
-            touch();
+            filtersChanged();
         }
         if (GUILayout.Button("…", GUILayout.Width(28)))
         {
-            string selected = EditorUtility.OpenFolderPanel("Select root folder", _rootFolder, "");
-            if (!string.IsNullOrEmpty(selected))
+            string sel = EditorUtility.OpenFolderPanel("Select root folder", _rootFolder, "");
+            if (!string.IsNullOrEmpty(sel))
             {
-                _rootFolder = selected;
+                _rootFolder = NormalizePath(sel);
                 RefreshSubfolders();
-                touch();
+                filtersChanged();
             }
         }
         EditorGUILayout.EndHorizontal();
     }
 
-    private void DrawAdvancedPanel(Action touch)
+    private void DrawAdvancedPanel(Action filtersChanged, Action invalidate)
     {
-        _includeAllSubfolders = EditorGUILayout.ToggleLeft("Include all sub-folders", _includeAllSubfolders);
-        _excludeEditorFolders = EditorGUILayout.ToggleLeft("Exclude folders named ‘Editor’", _excludeEditorFolders);
+        bool incAll = EditorGUILayout.ToggleLeft("Include all sub-folders", _includeAllSubfolders);
+        if (incAll != _includeAllSubfolders) { _includeAllSubfolders = incAll; filtersChanged(); }
+
+        bool exclEd = EditorGUILayout.ToggleLeft("Exclude folders named ‘Editor’", _excludeEditorFolders);
+        if (exclEd != _excludeEditorFolders) { _excludeEditorFolders = exclEd; filtersChanged(); }
 
         if (!_includeAllSubfolders)
         {
@@ -247,36 +164,59 @@ public class ScriptCollectorToWord : EditorWindow
             _subfoldersScroll = EditorGUILayout.BeginScrollView(_subfoldersScroll, GUILayout.Height(120));
             for (int i = 0; i < _subfolders.Length; i++)
             {
-                bool selected = EditorGUILayout.ToggleLeft(_subfolders[i], _subfolderSelected[i]);
-                if (selected != _subfolderSelected[i])
+                bool sel = EditorGUILayout.ToggleLeft(_subfolders[i], _subfolderSelected[i]);
+                if (sel != _subfolderSelected[i])
                 {
-                    _subfolderSelected[i] = selected;
-                    touch();
+                    _subfolderSelected[i] = sel;
+                    filtersChanged();
                 }
             }
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
         }
+
+        EditorGUILayout.Space(2);
+
+        bool prevChoose = _chooseConcreteScripts;
+        _chooseConcreteScripts = EditorGUILayout.ToggleLeft("Choose concrete scripts", _chooseConcreteScripts);
+        if (_chooseConcreteScripts != prevChoose) filtersChanged();
+
+        if (_chooseConcreteScripts)
+        {
+            if (_scriptFiles.Length == 0)
+            {
+                EditorGUILayout.HelpBox("No scripts found with current filters.", MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.LabelField("Select scripts", EditorStyles.boldLabel);
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                _scriptsScroll = EditorGUILayout.BeginScrollView(_scriptsScroll, GUILayout.Height(150));
+                for (int i = 0; i < _scriptFiles.Length; i++)
+                {
+                    bool sel = EditorGUILayout.ToggleLeft(_scriptFiles[i], _scriptSelected[i]);
+                    if (sel != _scriptSelected[i])
+                    {
+                        _scriptSelected[i] = sel;
+                        invalidate();                
+                    }
+                }
+                EditorGUILayout.EndScrollView();
+                EditorGUILayout.EndVertical();
+            }
+        }
     }
 
-    private void DrawOutputSelector(Action touch)
+    private void DrawOutputSelector(Action invalidate)
     {
         EditorGUILayout.LabelField("Output folder", EditorStyles.boldLabel);
         EditorGUILayout.BeginHorizontal();
-        string newOutput = EditorGUILayout.TextField(_outputFolder);
-        if (newOutput != _outputFolder)
-        {
-            _outputFolder = newOutput;
-            touch();
-        }
+        string newOut = EditorGUILayout.TextField(_outputFolder);
+        if (newOut != _outputFolder) { _outputFolder = NormalizePath(newOut); invalidate(); }
         if (GUILayout.Button("…", GUILayout.Width(28)))
         {
-            string selected = EditorUtility.OpenFolderPanel("Select output folder", _outputFolder, "");
-            if (!string.IsNullOrEmpty(selected))
-            {
-                _outputFolder = selected;
-                touch();
-            }
+            string sel = EditorUtility.OpenFolderPanel("Select output folder", _outputFolder, "");
+            if (!string.IsNullOrEmpty(sel)) { _outputFolder = NormalizePath(sel); invalidate(); }
         }
         EditorGUILayout.EndHorizontal();
 
@@ -285,9 +225,26 @@ public class ScriptCollectorToWord : EditorWindow
         string newFile = EditorGUILayout.TextField(_outputFileName);
         if (newFile != _outputFileName)
         {
-            _outputFileName = newFile;
-            touch();
+            _outputFileName = newFile.EndsWith(".docx", StringComparison.OrdinalIgnoreCase)
+                              ? newFile
+                              : newFile + ".docx";
+            invalidate();
         }
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private void DrawSuccessBox()
+    {
+        if (!_generationSucceeded) return;
+
+        var ok = new GUIStyle(EditorStyles.label)
+        { normal = { textColor = Color.green }, fontStyle = FontStyle.Bold };
+
+        EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+        GUILayout.Label("✔ Word document saved", ok);
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("Open Folder", GUILayout.Width(100)))
+            EditorUtility.RevealInFinder(_generatedPath);
         EditorGUILayout.EndHorizontal();
     }
 
@@ -303,115 +260,188 @@ public class ScriptCollectorToWord : EditorWindow
         _subfolders = Directory.GetDirectories(_rootFolder, "*", SearchOption.TopDirectoryOnly)
                                .Select(Path.GetFileName)
                                .ToArray();
-        _subfolderSelected = _subfolders.Select(_ => true).ToArray();
+        if (_subfolderSelected.Length != _subfolders.Length)
+            _subfolderSelected = _subfolders.Select(_ => true).ToArray();
+    }
+
+    private void RefreshScripts()
+    {
+        if (!_chooseConcreteScripts || !Directory.Exists(_rootFolder))
+        {
+            _scriptFiles    = Array.Empty<string>();
+            _scriptSelected = Array.Empty<bool>();
+            return;
+        }
+
+        IEnumerable<string> files = Directory.GetFiles(_rootFolder, "*.cs", SearchOption.AllDirectories);
+
+        if (!_includeAllSubfolders)
+        {
+            var allowed = new HashSet<string>(
+                _subfolders.Where((s, i) => _subfolderSelected[i])
+            );
+
+            files = files.Where(p =>
+            {
+                var rel = p.Substring(_rootFolder.Length)
+                           .TrimStart(Path.DirectorySeparatorChar, '/')
+                           .Replace("\\", "/");
+                var first = rel.Split('/')[0];
+                return allowed.Contains(first);
+            });
+        }
+
+        if (_excludeEditorFolders)
+            files = files.Where(f => !f.Replace("\\", "/").Contains("/Editor/"));
+
+        string[] newList = files
+            .Select(p => p.Substring(_rootFolder.Length + 1).Replace("\\", "/"))
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (newList.Length == _scriptFiles.Length)
+        {
+            var dict = new Dictionary<string, bool>(_scriptFiles.Length, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < _scriptFiles.Length; i++)
+                dict[_scriptFiles[i]] = _scriptSelected[i];
+
+            _scriptSelected = newList.Select(f => dict.TryGetValue(f, out bool v) ? v : true).ToArray();
+        }
+        else
+        {
+            _scriptSelected = newList.Select(_ => true).ToArray();
+        }
+
+        _scriptFiles = newList;
     }
 
     private void GenerateDocx()
     {
         _generationSucceeded = false;
 
-        var allFiles = Directory.GetFiles(_rootFolder, "*.cs", SearchOption.AllDirectories);
+        string[] files = Directory.GetFiles(_rootFolder, "*.cs", SearchOption.AllDirectories);
 
-        string[] filteredFiles;
-        if (_includeAllSubfolders)
-        {
-            filteredFiles = allFiles;
-        }
-        else
+        if (!_includeAllSubfolders)
         {
             var allowed = new HashSet<string>(
                 _subfolders.Where((s, i) => _subfolderSelected[i])
             );
-
-            filteredFiles = allFiles.Where(path =>
+            files = files.Where(p =>
             {
-                var rel = path.Substring(_rootFolder.Length)
-                              .TrimStart(Path.DirectorySeparatorChar, '/')
-                              .Replace("\\", "/");
+                var rel = p.Substring(_rootFolder.Length)
+                           .TrimStart(Path.DirectorySeparatorChar, '/')
+                           .Replace("\\", "/");
                 var first = rel.Split('/')[0];
                 return allowed.Contains(first);
             }).ToArray();
         }
 
         if (_excludeEditorFolders)
+            files = files.Where(f => !f.Replace("\\", "/").Contains("/Editor/")).ToArray();
+
+        if (_chooseConcreteScripts)
         {
-            filteredFiles = filteredFiles
-                .Where(f => !f.Replace("\\", "/").Contains("/Editor/"))
-                .ToArray();
+            var chosen = new HashSet<string>(
+                _scriptFiles.Where((rel, i) => _scriptSelected[i])
+                            .Select(rel => NormalizePath(Path.Combine(_rootFolder, rel))),
+                StringComparer.OrdinalIgnoreCase);
+
+            files = files.Where(chosen.Contains).ToArray();
         }
 
-        if (filteredFiles.Length == 0)
+        if (files.Length == 0)
         {
             EditorUtility.DisplayDialog("No scripts", "No C# scripts matched your selection.", "OK");
             return;
         }
 
-        var wordType = Type.GetType(OPEN_XML_TYPE_NAME);
-        if (wordType == null) { Debug.LogError("OpenXML SDK not available"); return; }
-
-        var asm             = wordType.Assembly;
-        var bodyType        = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Body");
-        var paragraphType   = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Paragraph");
-        var runType         = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Run");
-        var textType        = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Text");
-        var documentType    = asm.GetType("DocumentFormat.OpenXml.Wordprocessing.Document");
-        var mainPartType    = asm.GetType("DocumentFormat.OpenXml.Packaging.MainDocumentPart");
-        var enumType        = asm.GetType("DocumentFormat.OpenXml.WordprocessingDocumentType");
-        var openXmlElemType = asm.GetType("DocumentFormat.OpenXml.OpenXmlElement");
-        var compositeType   = asm.GetType("DocumentFormat.OpenXml.OpenXmlCompositeElement");
-
-        var appendChildMethod = compositeType.GetMethods()
-            .First(m => m.Name == "AppendChild" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
-            .MakeGenericMethod(openXmlElemType);
-
-        string docxPath = Path.Combine(_outputFolder, _outputFileName);
+        string docxPath = NormalizePath(Path.Combine(_outputFolder, _outputFileName));
 
         if (File.Exists(docxPath))
         {
             try { File.Delete(docxPath); }
             catch (IOException)
             {
-                if (!EditorUtility.DisplayDialog("File in use", "Close it and retry.", "Retry", "Cancel")) { return; }
+                if (!EditorUtility.DisplayDialog("File in use",
+                        "Close the file in Word and press Retry.", "Retry", "Cancel"))
+                    return;
                 File.Delete(docxPath);
             }
         }
 
-        object docx     = wordType.GetMethod("Create", new[] { typeof(string), enumType, typeof(bool) })
-                                  .Invoke(null, new object[] { docxPath, Enum.Parse(enumType, "Document"), false });
-        object mainPart = wordType.GetMethod("AddMainDocumentPart").Invoke(docx, null);
+        using var fs  = new FileStream(docxPath, FileMode.Create, FileAccess.ReadWrite);
+        using var zip = new ZipArchive(fs, ZipArchiveMode.Create);
 
-        var docProp = mainPartType.GetProperty("Document");
-        object document = Activator.CreateInstance(documentType);
-        docProp.SetValue(mainPart, document);
+        AddEntry(zip, "[Content_Types].xml", GetContentTypesXml());
+        AddEntry(zip, "_rels/.rels",        GetRootRelsXml());
 
-        object body = Activator.CreateInstance(bodyType);
-        appendChildMethod.Invoke(document, new[] { body });
+        var scriptData = files.Select(p => (Path.GetFileName(p), File.ReadAllText(p)));
+        AddEntry(zip, "word/document.xml", BuildDocumentXml(scriptData));
 
-        foreach (var file in filteredFiles)
-        {
-            AddParagraph(body, paragraphType, runType, textType, appendChildMethod, Path.GetFileName(file));
-            AddParagraph(body, paragraphType, runType, textType, appendChildMethod, File.ReadAllText(file));
-        }
-
-        wordType.GetMethod("Save").Invoke(docx, null);
-        wordType.GetMethod("Dispose").Invoke(docx, null);
+        zip.Dispose();
         AssetDatabase.Refresh();
 
         _generationSucceeded = true;
         _generatedPath       = docxPath;
-        Debug.Log($"Collected {filteredFiles.Length} scripts → '{docxPath}'");
+        Debug.Log($"Collected {files.Length} scripts → '{docxPath}'");
     }
 
-    private static void AddParagraph(object body, Type paragraphType, Type runType, Type textType, MethodInfo appendChildMethod, string content)
-    {
-        var paragraph = Activator.CreateInstance(paragraphType);
-        var run       = Activator.CreateInstance(runType);
-        var text      = Activator.CreateInstance(textType);
-        textType.GetProperty("Text")?.SetValue(text, content);
+    /* ─────────── Служебные методы ─────────── */
 
-        appendChildMethod.Invoke(run,       new[] { text      });
-        appendChildMethod.Invoke(paragraph, new[] { run       });
-        appendChildMethod.Invoke(body,      new[] { paragraph });
+    private static string NormalizePath(string p)
+    {
+        if (string.IsNullOrWhiteSpace(p)) return string.Empty;
+        string full = Path.GetFullPath(p).Replace('/', '\\');
+        return full.TrimEnd('\\');
+    }
+
+    private static void AddEntry(ZipArchive zip, string path, string content)
+    {
+        var entry = zip.CreateEntry(path, CompressionLevel.Optimal);
+        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+        writer.Write(content);
+    }
+
+    private static string GetContentTypesXml() => @"<?xml version=""1.0"" encoding=""UTF-8""?>
+<Types xmlns=""http://schemas.openxmlformats.org/package/2006/content-types"">
+  <Default Extension=""rels"" ContentType=""application/vnd.openxmlformats-package.relationships+xml""/>
+  <Default Extension=""xml""  ContentType=""application/xml""/>
+  <Override PartName=""/word/document.xml""
+            ContentType=""application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml""/>
+</Types>";
+
+    private static string GetRootRelsXml() => @"<?xml version=""1.0"" encoding=""UTF-8""?>
+<Relationships xmlns=""http://schemas.openxmlformats.org/package/2006/relationships"">
+  <Relationship Id=""R1""
+                Type=""http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument""
+                Target=""word/document.xml""/>
+</Relationships>";
+
+    private static string BuildDocumentXml(IEnumerable<(string name, string code)> scripts)
+    {
+        var sb = new StringBuilder();
+        sb.Append(@"<?xml version=""1.0"" encoding=""UTF-8"" standalone=""yes""?>
+<w:document xmlns:w=""http://schemas.openxmlformats.org/wordprocessingml/2006/main"">
+  <w:body>");
+
+        foreach (var (name, code) in scripts)
+        {
+            AppendParagraph(sb, name);
+            foreach (var line in code.Split('\n'))
+                AppendParagraph(sb, line.Replace("\r", string.Empty));
+        }
+
+        sb.Append(@"
+    <w:sectPr/>
+  </w:body>
+</w:document>");
+        return sb.ToString();
+    }
+
+    private static void AppendParagraph(StringBuilder sb, string text)
+    {
+        string safe = SecurityElement.Escape(text);
+        sb.Append($@"<w:p><w:r><w:t xml:space=""preserve"">{safe}</w:t></w:r></w:p>");
     }
 }
 #endif
